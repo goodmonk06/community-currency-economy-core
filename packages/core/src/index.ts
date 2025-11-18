@@ -8,6 +8,14 @@ export { WebhookService } from './services/webhook.service';
 // Export types
 export * from './types';
 
+// Export validation
+export * from './validation/schemas';
+
+// Export utilities
+export * from './lib/errors';
+export * from './lib/logger';
+export * from './lib/metrics';
+
 // Export Prisma client
 export { prisma } from './lib/prisma';
 export { PrismaClient, Prisma } from '@prisma/client';

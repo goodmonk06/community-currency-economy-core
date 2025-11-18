@@ -18,10 +18,16 @@ model Community {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  currencies          Currency[]
-  accounts            Account[]
-  ledgerEntries       LedgerEntry[]
-  webhookSubscriptions WebhookSubscription[]
+  currencies              Currency[]
+  accounts                Account[]
+  ledgerEntries           LedgerEntry[]
+  webhookSubscriptions    WebhookSubscription[]
+  accountGroups           AccountGroup[]
+  transactionTemplates    TransactionTemplate[]
+  scheduledTransactions   ScheduledTransaction[]
+  transactionPolicies     TransactionPolicy[]
+  auditLogs               AuditLog[]
+  currencyExchangeRates   CurrencyExchangeRate[]
 
   @@index([slug])
 }
@@ -37,9 +43,14 @@ model Currency {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  community         Community         @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  ledgerEntries     LedgerEntry[]
-  balanceSnapshots  BalanceSnapshot[]
+  community              Community              @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  ledgerEntries          LedgerEntry[]
+  balanceSnapshots       BalanceSnapshot[]
+  transactionTemplates   TransactionTemplate[]
+  scheduledTransactions  ScheduledTransaction[]
+  transactionPolicies    TransactionPolicy[]
+  exchangeRatesFrom      CurrencyExchangeRate[] @relation("FromCurrency")
+  exchangeRatesTo        CurrencyExchangeRate[] @relation("ToCurrency")
 
   @@unique([communityId, code])
   @@index([communityId])
@@ -61,10 +72,14 @@ model Account {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  community              Community         @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  ledgerEntriesFrom      LedgerEntry[]     @relation("FromAccount")
-  ledgerEntriesTo        LedgerEntry[]     @relation("ToAccount")
-  balanceSnapshots       BalanceSnapshot[]
+  community                Community                @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  ledgerEntriesFrom        LedgerEntry[]            @relation("FromAccount")
+  ledgerEntriesTo          LedgerEntry[]            @relation("ToAccount")
+  balanceSnapshots         BalanceSnapshot[]
+  groupMemberships         AccountGroupMember[]
+  scheduledTransactionsFrom ScheduledTransaction[]  @relation("ScheduledFrom")
+  scheduledTransactionsTo   ScheduledTransaction[]  @relation("ScheduledTo")
+  transactionPolicies      TransactionPolicy[]
 
   @@unique([communityId, ownerType, ownerRef])
   @@index([communityId])
@@ -126,3 +141,227 @@ model WebhookSubscription {
 
   @@index([communityId, active])
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// PHASE 3 EXTENSIONS: Domain deepening entities
+// ────────────────────────────────────────────────────────────────────────────
+
+// AccountGroup enables organizing accounts into cohorts
+model AccountGroup {
+  id          String   @id @default(cuid())
+  communityId String
+  name        String
+  description String?
+  parentId    String?  // For nested hierarchies
+  metadataJson String? @db.Text // Additional group configuration
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  community       Community            @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  parent          AccountGroup?        @relation("GroupHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children        AccountGroup[]       @relation("GroupHierarchy")
+  memberships     AccountGroupMember[]
+
+  @@unique([communityId, name])
+  @@index([communityId])
+  @@index([parentId])
+}
+
+// AccountGroupMember tracks which accounts belong to which groups
+model AccountGroupMember {
+  id        String   @id @default(cuid())
+  groupId   String
+  accountId String
+  role      String?  // Optional role within the group (e.g., "admin", "member")
+  joinedAt  DateTime @default(now())
+
+  group   AccountGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  account Account      @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, accountId])
+  @@index([groupId])
+  @@index([accountId])
+}
+
+enum TemplateStatus {
+  active
+  inactive
+  archived
+}
+
+// TransactionTemplate defines reusable transaction patterns
+model TransactionTemplate {
+  id            String         @id @default(cuid())
+  communityId   String
+  name          String
+  description   String?
+  currencyId    String
+  fromPattern   String         // Account pattern (e.g., "system:treasury", "pool:*")
+  toPattern     String         // Account pattern
+  amountType    String         // "fixed" or "variable"
+  fixedAmount   Decimal?       @db.Decimal(20, 8)
+  reasonCode    String
+  metadataJson  String?        @db.Text // Default metadata
+  status        TemplateStatus @default(active)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  createdBy     String?        // Reference to admin/user who created it
+
+  community             Community              @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  currency              Currency               @relation(fields: [currencyId], references: [id], onDelete: Cascade)
+  scheduledTransactions ScheduledTransaction[]
+
+  @@index([communityId, status])
+  @@index([currencyId])
+}
+
+enum ScheduleFrequency {
+  once      // One-time scheduled transaction
+  daily
+  weekly
+  monthly
+  yearly
+}
+
+enum ScheduledStatus {
+  pending
+  completed
+  failed
+  cancelled
+}
+
+// ScheduledTransaction enables future and recurring transactions
+model ScheduledTransaction {
+  id               String            @id @default(cuid())
+  communityId      String
+  templateId       String?           // Optional link to template
+  currencyId       String
+  fromAccountId    String
+  toAccountId      String
+  amount           Decimal           @db.Decimal(20, 8)
+  reasonCode       String
+  metadataJson     String?           @db.Text
+  frequency        ScheduleFrequency
+  scheduledFor     DateTime          // Next execution time
+  lastExecutedAt   DateTime?         // Last successful execution
+  executionCount   Int               @default(0)
+  maxExecutions    Int?              // Null = infinite
+  status           ScheduledStatus   @default(pending)
+  failureReason    String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  community   Community             @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  template    TransactionTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  currency    Currency              @relation(fields: [currencyId], references: [id], onDelete: Cascade)
+  fromAccount Account               @relation("ScheduledFrom", fields: [fromAccountId], references: [id], onDelete: Cascade)
+  toAccount   Account               @relation("ScheduledTo", fields: [toAccountId], references: [id], onDelete: Cascade)
+
+  @@index([communityId, status, scheduledFor])
+  @@index([templateId])
+  @@index([fromAccountId])
+  @@index([toAccountId])
+}
+
+enum PolicyType {
+  daily_limit       // Daily transaction limit
+  transaction_max   // Maximum per transaction
+  approval_required // Requires approval above threshold
+  rate_limit        // Rate limiting
+}
+
+// TransactionPolicy defines rules and limits
+model TransactionPolicy {
+  id           String     @id @default(cuid())
+  communityId  String
+  name         String
+  description  String?
+  policyType   PolicyType
+  currencyId   String?    // Null = applies to all currencies
+  accountId    String?    // Null = applies to all accounts
+  limitAmount  Decimal?   @db.Decimal(20, 8) // Amount threshold
+  limitCount   Int?       // Count threshold
+  timeWindow   String?    // e.g., "24h", "1w"
+  active       Boolean    @default(true)
+  metadataJson String?    @db.Text // Additional configuration
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  currency  Currency? @relation(fields: [currencyId], references: [id], onDelete: Cascade)
+  account   Account?  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([communityId, active])
+  @@index([currencyId])
+  @@index([accountId])
+}
+
+enum AuditAction {
+  create
+  update
+  delete
+  transfer
+  grant
+  approve
+  reject
+}
+
+enum AuditEntityType {
+  community
+  currency
+  account
+  ledger_entry
+  policy
+  template
+  scheduled_transaction
+  group
+  webhook
+}
+
+// AuditLog tracks all system actions for compliance
+model AuditLog {
+  id          String          @id @default(cuid())
+  communityId String?         // Null for system-wide actions
+  entityType  AuditEntityType
+  entityId    String
+  action      AuditAction
+  actorType   String          // "user", "system", "api"
+  actorRef    String          // User ID or system identifier
+  changes     String?         @db.Text // JSON diff of changes
+  metadataJson String?        @db.Text // Additional context
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime        @default(now())
+
+  community Community? @relation(fields: [communityId], references: [id], onDelete: Cascade)
+
+  @@index([communityId, createdAt])
+  @@index([entityType, entityId])
+  @@index([actorRef])
+  @@index([createdAt])
+}
+
+// CurrencyExchangeRate enables multi-currency operations
+model CurrencyExchangeRate {
+  id             String   @id @default(cuid())
+  communityId    String
+  fromCurrencyId String
+  toCurrencyId   String
+  rate           Decimal  @db.Decimal(20, 8) // Exchange rate (from -> to)
+  effectiveFrom  DateTime
+  effectiveUntil DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  community    Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  fromCurrency Currency  @relation("FromCurrency", fields: [fromCurrencyId], references: [id], onDelete: Cascade)
+  toCurrency   Currency  @relation("ToCurrency", fields: [toCurrencyId], references: [id], onDelete: Cascade)
+
+  @@index([communityId, fromCurrencyId, toCurrencyId, effectiveFrom])
+  @@index([fromCurrencyId])
+  @@index([toCurrencyId])
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Update existing models with new relationships
+// ────────────────────────────────────────────────────────────────────────────
