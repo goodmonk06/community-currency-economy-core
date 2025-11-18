@@ -667,6 +667,239 @@ Run snapshot creation as a scheduled job (e.g., daily or weekly).
 4. **Rate limiting**: Implement rate limiting on your API gateway
 5. **Access control**: Add authentication/authorization layer before the API
 
+## Phase 3 Enhancements
+
+The system has been enhanced with advanced features for production use:
+
+### New Domain Entities
+
+**Account Groups**: Organize accounts into cohorts with hierarchies
+```typescript
+// Create merchant group
+const merchantGroup = await groupService.createGroup(
+  communityId,
+  'Merchants',
+  'Verified sellers'
+);
+
+// Add members
+await groupService.addMember(merchantGroup.id, accountId, 'seller');
+```
+
+**Transaction Templates**: Reusable transaction patterns
+```typescript
+// Create welcome bonus template
+const template = await templateService.createTemplate({
+  communityId,
+  name: 'Welcome Bonus',
+  currencyId,
+  fromPattern: 'system:treasury',
+  toPattern: 'member:*',
+  amountType: 'fixed',
+  fixedAmount: 100,
+  reasonCode: 'welcome_bonus',
+});
+```
+
+**Transaction Policies**: Rules and limits
+```typescript
+// Daily spending limit
+const policy = await prisma.transactionPolicy.create({
+  data: {
+    communityId,
+    name: 'Daily Purchase Limit',
+    policyType: 'daily_limit',
+    limitAmount: 500,
+    timeWindow: '24h',
+  },
+});
+```
+
+**Audit Logs**: Comprehensive activity tracking
+```typescript
+await auditService.log({
+  entityType: 'ledger_entry',
+  entityId: transferId,
+  action: 'create',
+  actorType: 'user',
+  actorRef: userId,
+  ipAddress: req.ip,
+});
+```
+
+**Currency Exchange Rates**: Multi-currency operations
+```typescript
+// Set exchange rate: 1 KARMA = 0.5 COINS
+await prisma.currencyExchangeRate.create({
+  data: {
+    fromCurrencyId: karmaId,
+    toCurrencyId: coinsId,
+    rate: 0.5,
+    effectiveFrom: new Date(),
+  },
+});
+```
+
+### Infrastructure Improvements
+
+**Validation with Zod**: Type-safe API validation
+```typescript
+import { TransferSchema } from '@community-economy/core';
+
+const validated = TransferSchema.parse(requestBody);
+```
+
+**Structured Logging**: Contextual logging with Pino
+```typescript
+import { logInfo, logError } from '@community-economy/core';
+
+logInfo('Transfer executed', {
+  transferId,
+  amount,
+  communityId,
+});
+```
+
+**Metrics**: Pluggable metrics abstraction
+```typescript
+import { incrementCounter, recordHistogram } from '@community-economy/core';
+
+incrementCounter('economy.transfer.created', 1, { communityId });
+recordHistogram('economy.transfer.duration_ms', duration);
+```
+
+**Domain Events**: Event-driven architecture
+```typescript
+import { eventBus } from '@community-economy/core';
+
+eventBus.on('transfer.created', async (event) => {
+  await sendNotification(event.data);
+  await updateAnalytics(event.data);
+});
+```
+
+### Extensibility Layer
+
+**Adapter Pattern**: Pluggable external integrations
+```typescript
+import { adapters, INotificationAdapter } from '@community-economy/core';
+
+class MyNotificationAdapter implements INotificationAdapter {
+  async sendEmail(message) { /* ... */ }
+  async sendSMS(message) { /* ... */ }
+  async sendPush(message) { /* ... */ }
+}
+
+adapters.setNotificationAdapter(new MyNotificationAdapter());
+```
+
+Available adapters:
+- `INotificationAdapter`: Email, SMS, push notifications
+- `IStorageAdapter`: File storage (S3, local, etc.)
+- `IAuditAdapter`: External audit systems
+- `IAuthAdapter`: Authentication providers
+- `MetricsAdapter`: Prometheus, DataDog, etc.
+
+### Test Infrastructure
+
+**Test Factories**: Easy test data creation
+```typescript
+import { ScenarioFactory } from '@community-economy/core';
+
+const scenario = new ScenarioFactory(prisma);
+
+// Create complete economy with one line
+const economy = await scenario.createBasicEconomy();
+// Returns: community, currencies, accounts, initial grants
+
+// Or create specific scenarios
+const gamification = await scenario.createGamificationScenario();
+```
+
+Individual factories available:
+- `CommunityFactory`: Create communities
+- `CurrencyFactory`: Create currencies
+- `AccountFactory`: Create accounts (member, pool, system)
+- `TransactionFactory`: Create transfers
+- `AccountGroupFactory`: Create groups with members
+- `TemplateFactory`: Create transaction templates
+
+### CLI Tools
+
+Command-line interface for operations:
+
+```bash
+# List communities
+pnpm cli community:list
+
+# Create community
+pnpm cli community:create my-community "My Community"
+
+# Show account balances
+pnpm cli balance:show <communityId> <accountId>
+
+# Execute transfer
+pnpm cli transfer:execute <communityId> <currencyCode> <from> <to> <amount> <reason>
+
+# Create account group
+pnpm cli group:create <communityId> <name> [description]
+
+# Create balance snapshots
+pnpm cli balance:snapshot <communityId>
+```
+
+### Enhanced Seed Data
+
+Multiple realistic scenarios for demonstration:
+
+```bash
+# Run enhanced seed (includes 3 scenarios)
+pnpm --filter @community-economy/core prisma:seed
+# Or manually:
+tsx packages/core/prisma/seed-enhanced.ts
+```
+
+**Scenario 1: Gamification & Rewards**
+- Community with KARMA and COINS
+- Power users vs new users groups
+- Reward pool with templates
+- Achievement rewards
+
+**Scenario 2: Internal Marketplace**
+- Artisan collective with CREDITS
+- Merchant and buyer groups
+- Realistic purchase transactions
+- Group-based organization
+
+**Scenario 3: Treasury & Grant Management**
+- DAO with governance tokens
+- Grant pools (development, community)
+- Project teams receiving grants
+- Budget cycle tracking
+
+### Documentation
+
+Comprehensive documentation added:
+
+- `docs/PHASE3_OVERVIEW.md`: Phase 3 implementation plan and architecture
+- `docs/INTEGRATION_RECIPES.md`: Practical integration examples
+- `docs/DOMAIN_NOTES.md`: Deep dive into domain model and design decisions
+
+### Vertical Slices Implemented
+
+Three complete end-to-end flows:
+
+1. **Gamification System**: Reward pools → templates → group-based rewards
+2. **Marketplace**: Merchant/buyer groups → purchases → exchange rates
+3. **Treasury Management**: Grant pools → disbursements → audit trails
+
+All slices include:
+- Domain logic (services)
+- Data persistence (Prisma)
+- Seed data (realistic examples)
+- Test factories (for testing)
+- CLI commands (for operations)
+
 ## Roadmap
 
 Future enhancements:
