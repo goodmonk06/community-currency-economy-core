@@ -1,0 +1,128 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Community represents an isolated economic space
+model Community {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  currencies          Currency[]
+  accounts            Account[]
+  ledgerEntries       LedgerEntry[]
+  webhookSubscriptions WebhookSubscription[]
+
+  @@index([slug])
+}
+
+// Currency defines a type of value that can be tracked within a community
+model Currency {
+  id          String   @id @default(cuid())
+  communityId String
+  code        String   // e.g., "KARMA", "COINS", "BLESSINGS"
+  name        String
+  description String?
+  decimals    Int      @default(0) // Number of decimal places (0 for whole numbers)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  community         Community         @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  ledgerEntries     LedgerEntry[]
+  balanceSnapshots  BalanceSnapshot[]
+
+  @@unique([communityId, code])
+  @@index([communityId])
+}
+
+enum OwnerType {
+  member  // Regular community member
+  pool    // Shared pool account
+  system  // System/treasury account
+}
+
+// Account represents an entity that can hold balances
+model Account {
+  id          String    @id @default(cuid())
+  communityId String
+  ownerType   OwnerType
+  ownerRef    String    // Reference to the owner (user ID, pool name, etc.)
+  displayName String?   // Optional display name for the account
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  community              Community         @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  ledgerEntriesFrom      LedgerEntry[]     @relation("FromAccount")
+  ledgerEntriesTo        LedgerEntry[]     @relation("ToAccount")
+  balanceSnapshots       BalanceSnapshot[]
+
+  @@unique([communityId, ownerType, ownerRef])
+  @@index([communityId])
+  @@index([ownerType, ownerRef])
+}
+
+// LedgerEntry records all transactions in a double-entry system
+model LedgerEntry {
+  id            String   @id @default(cuid())
+  communityId   String
+  currencyId    String
+  fromAccountId String
+  toAccountId   String
+  amount        Decimal  @db.Decimal(20, 8) // Support up to 8 decimal places
+  reasonCode    String   // e.g., "purchase", "reward", "transfer", "initial_grant"
+  metadataJson  String?  @db.Text // JSON string for additional context
+  createdAt     DateTime @default(now())
+
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  currency    Currency  @relation(fields: [currencyId], references: [id], onDelete: Cascade)
+  fromAccount Account   @relation("FromAccount", fields: [fromAccountId], references: [id], onDelete: Restrict)
+  toAccount   Account   @relation("ToAccount", fields: [toAccountId], references: [id], onDelete: Restrict)
+
+  @@index([communityId, createdAt])
+  @@index([fromAccountId])
+  @@index([toAccountId])
+  @@index([currencyId])
+  @@index([reasonCode])
+}
+
+// BalanceSnapshot stores periodic balance snapshots for performance
+model BalanceSnapshot {
+  id         String   @id @default(cuid())
+  accountId  String
+  currencyId String
+  balance    Decimal  @db.Decimal(20, 8)
+  takenAt    DateTime @default(now())
+
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  currency Currency @relation(fields: [currencyId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, currencyId, takenAt])
+  @@index([accountId, currencyId])
+  @@index([takenAt])
+}
+
+// WebhookSubscription enables event notifications to external services
+model WebhookSubscription {
+  id             String   @id @default(cuid())
+  communityId    String
+  url            String
+  secret         String   // For signing webhook payloads
+  eventTypesJson String   @db.Text // JSON array of event types to subscribe to
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  community Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+
+  @@index([communityId, active])
+}
